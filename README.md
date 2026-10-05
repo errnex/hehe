@@ -14,7 +14,7 @@ Every sub-screen has a ← BACK button. Each screen shows only its own options.
 
 ## How to play
 
-- **Third-person view:** your own Steve-style blocky character is visible — pixel-art face (eyes + smile), hair, colored shirt — identified by a white ring at its feet (no floating code label above your head — your code is always shown in the top HUD). WASD/joystick movement turns the character to face the direction it is actually running, while the camera smoothly settles behind it. The camera pulls in when a wall or container blocks it.
+- **Third-person view:** your own Steve-style blocky character is visible — pixel-art face (eyes + smile), hair, colored shirt — identified by a white ring at its feet (no floating code label above your head — memorize it during the 5s countdown). WASD/joystick movement turns the character to face the direction it is actually running, while the camera smoothly settles behind it. The camera pulls in when a wall or container blocks it.
 - **PC:** mouse auto-locks when the match starts • move the **mouse to look** (FPS-style: smoothed, pitch-clamped, pointer-lock; WASD moves relative to the camera) • `ESC` releases, click to re-lock • `SHIFT` to sprint • `SPACE` to jump • type `0-9` to enter codes • `Backspace` to delete • mouse sensitivity slider in INFO • after death: drone cam — `WASD`/arrows to pan, mouse wheel to zoom
 - **Mobile:** phones must be in **LANDSCAPE** — portrait shows a rotate prompt and pauses the match • left joystick to move • drag the right side of the screen to rotate the camera • `JUMP` button • on-screen number keypad • tap the minimap to collapse/expand it (smaller on phones)
 
@@ -35,10 +35,10 @@ Pick your level after pressing **PLAY WITH BOTS** (MEDIUM is the default):
 | MEDIUM | 0.8–1.4s | 0.6–0.9s | 0.93× | Rare fumbles. ~3.5–5s before you die while visible. |
 | HARD | 0.4–0.9s | 0.35–0.6s | 1.0× | The original ruthless bots. No mercy. |
 
-Fairness rules on every level: bots cannot type for the first **3 seconds after GO** (spawn grace), spawn points are spread out and kept out of direct line of sight, and the **DETECTED** warning fills up (▮▮▮▯) as a bot gets closer to finishing your code — break line of sight to stop them.
+Fairness rules on every level: bots cannot type for the first **3 seconds after GO** (spawn grace), spawn points are spread out and kept out of direct line of sight, and a small **DETECTED** badge under the minimap fills up (▮▮▮▯) as a bot gets closer to finishing your code — break line of sight to stop them.
 - A code only eliminates an enemy you are currently looking at, or one you saw within the last **5 seconds** (memory window)
 - Wrong code / enemy not seen: buffer cleared + input locked for **0.8 seconds** (anti brute-force)
-- If a bot is typing your code, a **DETECTED** warning appears — break line of sight to stop them
+- If a bot is typing your code, a small **DETECTED** badge appears under the minimap — break line of sight to stop them
 - Before the match starts there is a **5-second countdown** to memorize your own code
 - The safe zone keeps shrinking. Outside the zone you have 5 seconds to get back before being eliminated
 - Win = be the last one standing out of 50
@@ -48,7 +48,7 @@ Fairness rules on every level: bots cannot type for the first **3 seconds after 
 Random item drops spawn around the map (~3 active at a time). **Supply drops** fall every **15 seconds** (the first one lands right at GO) with a light beacon everyone can see — each contains 2–3 items. Player and bots both pick items up by walking over them. About 22% of spawned items are **🎭 MIMICS** — traps that look IDENTICAL to a real item (same icon, same ring color) but scramble the PICKER'S OWN code when grabbed. Bots fall for them too.
 
 - **❤️ LOVE shield:** makes you immune to ONE code-kill attempt. A small ❤️ floats next to your head so everyone can see it. If someone types your code while shielded, the kill is blocked, the shield is consumed, and the attacker is told "IMMUNE" and briefly locked out. Non-stackable (one at a time). Does NOT protect from zone damage.
-- **🔀 DECOY:** instantly re-randomizes your 4-digit code (always unique among living players). Your HUD "YOUR CODE" updates immediately. Bots mid-typing your old code fumble and lose their progress.
+- **🔀 DECOY:** instantly re-randomizes your 4-digit code (always unique among living players). A notification shows the new code immediately. Bots mid-typing your old code fumble and lose their progress.
 - **💥 CONFUSE:** instantly scrambles the NEAREST living enemy's code. Fizzles harmlessly if no enemies remain.
 
 ### Kill announcements

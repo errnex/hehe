@@ -982,9 +982,8 @@ app.insertAdjacentHTML('beforeend', `
   </div>
 </div>
 <div id="hud" class="hidden">
-  <div id="warn"><span>⚠ DETECTED ⚠</span></div>
+  <div id="warn"><span>⚠ DETECTED</span></div>
   <div id="crosshair">+</div>
-  <div id="mycode"><div class="lbl">YOUR CODE</div><div class="val" id="mycode-val">----</div></div>
   <div id="alivebox"><div class="alive">👥 <span id="alive">50</span></div><div class="zone" id="zonetxt">Safe zone</div><div class="diff" id="diffname">MEDIUM</div></div>
   <div id="killfeed"></div>
   <div id="banner"></div>
@@ -1235,7 +1234,7 @@ function pickUpItem(p, idx) {
     // MIMIC trap: scrambles the PICKER's own code instead of the expected effect
     const nc = scrambleCode(p);
     feed('🎭 Someone grabbed a MIMIC!'); // generic — never reveal whose code changed
-    if (p.isPlayer) { $('mycode-val').textContent = nc; banner('🎭 MIMIC! Your code got scrambled! New: ' + nc); beep(280, 0.25, 'sawtooth', 0.14); }
+    if (p.isPlayer) { banner('🎭 MIMIC! Your code got scrambled! New: ' + nc); beep(280, 0.25, 'sawtooth', 0.14); }
     else beep(480, 0.1, 'sawtooth', 0.08);
     removeItemAt(idx);
     return;
@@ -1251,7 +1250,7 @@ function pickUpItem(p, idx) {
     // DECOY: instant code re-randomization (no duration, no stacking)
     const nc = scrambleCode(p);
     feed('🔀 Someone used a decoy!'); // generic — never reveal whose code changed
-    if (p.isPlayer) { $('mycode-val').textContent = nc; banner('🔀 New code: ' + nc); beep(1200, 0.12, 'sine', 0.14); }
+    if (p.isPlayer) { banner('🔀 New code: ' + nc); beep(1200, 0.12, 'sine', 0.14); }
     else beep(880, 0.08, 'sine', 0.08);
   } else {
     // CONFUSE: scramble the NEAREST living enemy's code, instant. Fizzles if none.
@@ -1259,7 +1258,7 @@ function pickUpItem(p, idx) {
     if (!tgt) { if (p.isPlayer) banner('💥 Confuse fizzled — no enemies left!'); return; }
     const nc = scrambleCode(tgt);
     feed('💥 Someone\'s code got scrambled!'); // generic — never reveal whose
-    if (tgt.isPlayer) { $('mycode-val').textContent = nc; banner('💥 Your code was scrambled! New: ' + nc); beep(400, 0.2, 'sawtooth', 0.14); }
+    if (tgt.isPlayer) { banner('💥 Your code was scrambled! New: ' + nc); beep(400, 0.2, 'sawtooth', 0.14); }
     else beep(940, 0.1, 'sine', 0.1);
   }
   removeItemAt(idx);
@@ -1461,7 +1460,6 @@ function startMatch(diffKey) {
   for (let i = 0; i < 3; i++) spawnItem();
   applyAccessories(G.player); // equip earned kill-reward accessories
   yaw = G.player.yaw - Math.PI; pitch = 0; yawT = yaw; pitchT = pitch; camSnap = true;
-  $('mycode-val').textContent = G.player.code;
   $('diffname').textContent = cfg.label + ' • ' + (G.mapMode === 'night' ? '🌙' : '☀️');
   applyMapMode();
   $('killfeed').innerHTML = '';
@@ -1661,9 +1659,9 @@ function renderBuffer() {
 }
 function banner(txt) {
   const b = $('banner'); b.textContent = txt; b.style.opacity = 1;
-  clearTimeout(b._t); b._t = setTimeout(() => b.style.opacity = 0, 1400);
+  clearTimeout(b._t); b._t = setTimeout(() => b.style.opacity = 0, 2500);
 }
-// ---------- Kill announcements: big celebratory center-screen banners, queued (max 2) ----------
+// ---------- Kill announcements: compact top-center pills (v18), queued (max 2) ----------
 const annQ = []; let annActive = false;
 function announce(txt, cls, voice) {
   if (annQ.length >= 2) annQ.shift(); // never stack-block the view
