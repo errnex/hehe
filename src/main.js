@@ -5,8 +5,8 @@ import './style.css';
 const MAP = 120; // half-size: map 240x240
 const CHAR_SCALE = 0.56; // ~1.34-unit-tall characters (was ~2.4 units)
 const CHAR_RADIUS = 0.34;
-const CHAR_EYE = 1.22;
-const CHAR_AIM_Y = 1.02;
+const CHAR_EYE = 0.9; // Steve-style: eye height for a ~1.34-unit character
+const CHAR_AIM_Y = 0.6;
 const app = document.getElementById('app');
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
@@ -24,7 +24,13 @@ let LOWQ = resolveQuality() === 'low';
 
 // ---------- Renderer / Scene ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const BASE_PR = Math.min(devicePixelRatio || 1, 2);
+renderer.setPixelRatio(BASE_PR);
+// v19: dynamic resolution on touch devices — step the pixel ratio down when FPS
+// sags, back up when it recovers. Desktop keeps the fixed BASE_PR.
+const PR_STEPS = [2, 1.5, 1.25, 1].filter(s => s <= BASE_PR + 1e-6);
+if (!PR_STEPS.length) PR_STEPS.push(BASE_PR);
+let prIdx = 0, fpsEMA = 60, prT = 0;
 renderer.setSize(innerWidth, innerHeight);
 app.appendChild(renderer.domElement);
 
@@ -104,6 +110,7 @@ const _cd = new THREE.Object3D();
     cloudData.push(cl);
   }
   cloudMesh.frustumCulled = false;
+  cloudMesh.userData.max = nClouds * boxesPer; // v19: LOW quality halves this per match
   scene.add(cloudMesh);
   refreshCloudInstances();
 }
@@ -138,6 +145,25 @@ function beep(freq = 660, dur = 0.07, type = 'square', vol = 0.12) {
   } catch (e) { /* audio optional */ }
 }
 // Announcer voice for the PLAYER's kill announcements (speechSynthesis, no assets)
+// Deeper, dramatic delivery: pick the deepest male English voice available.
+let annVoice = null;
+function pickAnnouncerVoice() {
+  try {
+    const ss = window.speechSynthesis; if (!ss) return null;
+    const vs = ss.getVoices(); if (!vs.length) return null;
+    const en = vs.filter(v => v.lang && v.lang.toLowerCase().startsWith('en'));
+    const pool = en.length ? en : vs;
+    const male = pool.find(v => /google uk english male|daniel|david|james|george|arthur|fred|ralph|thomas|brian|male/i.test(v.name || ''));
+    return male || pool[0];
+  } catch (e) { return null; }
+}
+try {
+  if (window.speechSynthesis) {
+    annVoice = pickAnnouncerVoice();
+    // voices often load async — re-pick once they're in
+    window.speechSynthesis.onvoiceschanged = () => { annVoice = pickAnnouncerVoice(); };
+  }
+} catch (e) {}
 function speak(text) {
   if (!soundOn()) return;
   try {
@@ -145,36 +171,55 @@ function speak(text) {
     if (!ss) return;
     ss.cancel(); // never queue up announcements
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US'; u.pitch = 0.85; u.rate = 0.95; u.volume = 1;
-    const vs = ss.getVoices();
-    const en = vs.find(v => v.lang && v.lang.toLowerCase().startsWith('en'));
-    if (en) u.voice = en;
+    u.lang = 'en-US'; u.pitch = 0.65; u.rate = 0.88; u.volume = 1; // deep & dramatic
+    const v = annVoice || pickAnnouncerVoice();
+    if (v) { u.voice = v; annVoice = v; }
     ss.speak(u);
   } catch (e) { /* voice optional */ }
 }
-// Simple disappointed "ahhh" when the PLAYER dies (WebAudio, no assets)
+// Deep, heavy, resigned "Ahhhhhhh" when the PLAYER dies (WebAudio, no assets).
+// Root-cause note: AC used to be created lazily and the one-shot pointerdown
+// unlock only fired once — if AC was created after that, it stayed suspended
+// and the death sound never played. Now we resume-and-play defensively.
 function deathScream() {
   if (!soundOn()) return;
   try {
     AC = AC || new (window.AudioContext || window.webkitAudioContext)();
-    if (AC.state === 'suspended') AC.resume();
-    const t = AC.currentTime, dur = 0.55;
-    const o = AC.createOscillator(); o.type = 'sine'; // pure sine — no harshness
-    o.frequency.setValueAtTime(330, t);
-    o.frequency.exponentialRampToValueAtTime(140, t + dur); // short disappointed glide down
-    const g = AC.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.3, t + 0.08);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g).connect(AC.destination);
-    o.start(t); o.stop(t + dur);
+    const play = () => {
+      try {
+        const t = AC.currentTime + 0.02, dur = 0.9;
+        const g = AC.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.5, t + 0.1); // clearly audible
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 650; lp.Q.value = 0.6;
+        lp.connect(g).connect(AC.destination);
+        // deep sine core: 200 -> 80 Hz, long resigned glide down
+        const o = AC.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(200, t);
+        o.frequency.exponentialRampToValueAtTime(80, t + dur);
+        o.connect(lp); o.start(t); o.stop(t + dur);
+        // throat-like lowpassed sawtooth blended under the sine (no vibrato)
+        const s = AC.createOscillator(); s.type = 'sawtooth';
+        s.frequency.setValueAtTime(200, t);
+        s.frequency.exponentialRampToValueAtTime(80, t + dur);
+        const sg = AC.createGain(); sg.gain.value = 0.22;
+        s.connect(sg).connect(lp); s.start(t); s.stop(t + dur);
+      } catch (e) { /* audio optional */ }
+    };
+    let done = false;
+    const once = () => { if (!done) { done = true; play(); } };
+    if (AC.state === 'suspended') {
+      try { AC.resume().then(once).catch(once); } catch (e) { once(); }
+      setTimeout(once, 400); // fallback in case resume never resolves
+    } else once();
   } catch (e) { /* audio optional */ }
 }
-// resume audio on first user gesture (browsers block audio before interaction)
-window.addEventListener('pointerdown', function unlockAudio() {
-  try { if (AC && AC.state === 'suspended') AC.resume(); } catch (e) {}
-  window.removeEventListener('pointerdown', unlockAudio);
-});
+// resume audio on user gestures (browsers block/suspend audio before interaction);
+// persistent (not one-shot) so a lazily-created context always gets resumed
+function unlockAudio() { try { if (AC && AC.state === 'suspended') AC.resume(); } catch (e) {} }
+window.addEventListener('pointerdown', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
 
 // ---------- Colliders (3D AABB: y0..y1 vertical span) ----------
 const colliders = []; // {minX,maxX,minZ,maxZ,y0,y1}
@@ -193,7 +238,7 @@ function groundY(x, z, feet) {
   }
   return g;
 }
-const CHAR_H = 1.35; // character world height (for vertical overlap tests)
+const CHAR_H = 1.34; // Steve-style character world height (for vertical overlap tests)
 function collide(pos, r = CHAR_RADIUS) {
   pos.x = Math.max(-MAP + r, Math.min(MAP - r, pos.x));
   pos.z = Math.max(-MAP + r, Math.min(MAP - r, pos.z));
@@ -569,15 +614,19 @@ function glowSprite(color, scale) {
 }
 // ---------- Night lamps: every building + streets get lamps ----------
 // Pole meshes are physical (visible day & night); bulbs/glow/point lights live in nightGroup.
-// Real point lights are budgeted: 4 park + 4 building + 2 street = 10 total.
+// EVERY lamp gets a real point light with the park-lamp spec
+// (PointLight 0xffc37a, intensity 40, distance 30, decay 1.7) so all lamps
+// illuminate their surroundings, not just themselves.
+// Light budget — HIGH: 4 park + 22 lamp posts + 10 interior = 36 point lights.
+// LOW tier (mobile): 2 park + 6 key lamp posts + 5 two-story interiors = 13.
 function lampPost(x, z, h = 4.2, real = false) {
   box(x, h / 2, z, 0.22, h, 0.22, 0x374151, false);
   addCollider(x, z, 0.5, 0.5, h);
   const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.32, 0.5), new THREE.MeshBasicMaterial({ color: 0xffd9a0 }));
   bulb.position.set(x, h + 0.18, z); nightGroup.add(bulb);
   const gl = glowSprite('rgba(255,205,120,0.95)', 3.4); gl.position.set(x, h + 0.2, z); nightGroup.add(gl);
-  if (real && !LOWQ) {
-    const pl = new THREE.PointLight(0xffc37a, 40, 32, 1.7);
+  if (!LOWQ || real) { // LOW keeps only the budgeted "real" subset
+    const pl = new THREE.PointLight(0xffc37a, 40, 30, 1.7);
     pl.position.set(x, h + 0.7, z); nightGroup.add(pl);
   }
 }
@@ -597,6 +646,27 @@ for (const [bx, bz, real] of B1_LAMPS) lampPost(bx, bz, 3.4, real);
 const STREET_LAMPS = [[-100, 7, false], [-60, -7, false], [-20, 7, false], [20, -7, true], [60, 7, false], [100, -7, false],
   [7, -100, false], [-7, -60, false], [7, -20, false], [-7, 20, true], [7, 60, false], [-7, 100, false]];
 for (const [sx, sz, real] of STREET_LAMPS) lampPost(sx, sz, 4.6, real);
+// ---------- Night interior lamps: rooms are no longer pitch dark ----------
+// One ceiling lamp per building interior, same park-lamp spec
+// (PointLight 0xffc37a, intensity 40, distance 30, decay 1.7).
+// No shadow maps in this renderer, so a ground-floor light also reaches the
+// upper floor through the slab — one light per two-story building is enough.
+// LOW tier: only the five two-story buildings (the enterable gameplay spaces).
+function interiorLamp(cx, cz, lightY, bulbY, lowOk) {
+  const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.55), new THREE.MeshBasicMaterial({ color: 0xffe2b0 }));
+  bulb.position.set(cx, bulbY, cz); nightGroup.add(bulb);
+  const gl = glowSprite('rgba(255,205,120,0.9)', 2.6); gl.position.set(cx, bulbY, cz); nightGroup.add(gl);
+  if (!LOWQ || lowOk) {
+    const pl = new THREE.PointLight(0xffc37a, 40, 30, 1.7);
+    pl.position.set(cx, lightY, cz); nightGroup.add(pl);
+  }
+}
+// five two-story buildings (14x10, ground floor height 3.6, slab at ~3.45)
+for (const [cx, cz] of [[-48, 68], [48, 68], [-95, -30], [100, -75], [-15, -55]])
+  interiorLamp(cx, cz, 2.4, 3.15, true);
+// warehouses + huts (single-story, height 4)
+for (const [cx, cz] of [[-30, 30], [40, -35], [75, 70], [-80, -52], [98, -24]])
+  interiorLamp(cx, cz, 2.8, 3.7, false);
 // stars (night only)
 {
   const n = 420, posArr = new Float32Array(n * 3);
@@ -615,7 +685,7 @@ function applyMapMode() {
   nightGroup.visible = night;
   skyDome.material.map = night ? skyTexNight : skyTexDay;
   skyDome.material.needsUpdate = true;
-  sunSprite.visible = !night;
+  sunSprite.visible = !night && !LOWQ; // sun glow skipped on LOW (perf)
   cloudMesh.material.opacity = night ? 0.5 : 0.94;
   hemi.intensity = night ? 0.22 : 1.05;
   sun.intensity = night ? 0.3 : 1.25;
@@ -728,7 +798,7 @@ function fireSprite() {
   blob(64, 44, 14, 'rgba(255,255,200,0.95)');
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), depthTest: true, transparent: true }));
   sp.scale.set(1.35, 1.35, 1);
-  sp.position.y = 1.15;
+  sp.position.y = 2.35; // above the Steve-style head
   return sp;
 }
 function attachFire(p) {
@@ -742,84 +812,82 @@ function removeFire(p) {
   const sp = p.grp.userData.fireSprite;
   if (sp) { p.grp.remove(sp); p.grp.userData.fireSprite = null; }
 }
-// ---------- Steve-style character faces (shared canvas textures, cheap for 50 players) ----------
-const HAIR_COLORS = [0x3b2a1a, 0x141414, 0xd9a441, 0xb5542c, 0x6e4a2f, 0x9c9c9c];
+// ---------- Steve-style characters (v18 look): blocky human, pixel-art face + hair ----------
+// Square 0.56^3 head with a 16x16 canvas face (eyes + smile, NearestFilter crisp),
+// 6 deterministic hair colors, colored shirt/pants per character. Front is +Z.
+const HAIR_COLORS = ['#4a2f1d', '#1a1a1a', '#e8c34a', '#c96a2e', '#7a4a2b', '#3d3d3d'];
 const SKIN_CSS = '#f2c99a';
-function makeFaceTexture() {
-  // 16x16 pixel-art face, Minecraft style: eyes + smile on skin background
+const SHIRT_PALETTE = [0xd32f2f, 0x1976d2, 0x388e3c, 0xf9a825, 0x7b1fa2, 0x00838f, 0xe64a19, 0x5d4037];
+const PANTS_PALETTE = [0x212121, 0x37474f, 0x3e2723, 0x1a237e, 0x4e342e];
+function hairFor(code) {
+  let h = 0;
+  for (const ch of String(code)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return HAIR_COLORS[h % HAIR_COLORS.length];
+}
+const FACE_TEX_CACHE = {};
+function makeFaceTexture(hairCss) {
+  // 16x16 pixel face: hair fringe on top rows, white eyes + blue-violet pupils, smile
+  if (FACE_TEX_CACHE[hairCss]) return FACE_TEX_CACHE[hairCss];
   const S = 16, cv = document.createElement('canvas'); cv.width = cv.height = S;
   const g = cv.getContext('2d');
   g.fillStyle = SKIN_CSS; g.fillRect(0, 0, S, S);
-  g.fillStyle = 'rgba(0,0,0,0.06)'; g.fillRect(0, 0, S, 2); // subtle top shading
-  // eyes: white with blue-violet pupils
-  g.fillStyle = '#ffffff'; g.fillRect(2, 6, 4, 3); g.fillRect(10, 6, 4, 3);
-  g.fillStyle = '#4a3fd6'; g.fillRect(3, 7, 2, 2); g.fillRect(11, 7, 2, 2);
-  g.fillStyle = '#1a1a2e'; g.fillRect(4, 7, 1, 1); g.fillRect(12, 7, 1, 1); // pupil glint shadow
+  // hair fringe: solid top rows with a jagged bottom edge
+  g.fillStyle = hairCss;
+  g.fillRect(0, 0, S, 3);
+  for (let x = 0; x < S; x += 2) g.fillRect(x, 3, 1, (x % 4 === 0) ? 2 : 1);
+  // eyes: white 3x2 with blue-violet pupils
+  for (const ex of [3, 10]) {
+    g.fillStyle = '#ffffff'; g.fillRect(ex, 6, 3, 2);
+    g.fillStyle = '#5b4bd6'; g.fillRect(ex + 1, 6, 1, 2);
+    g.fillStyle = '#ffffff'; g.fillRect(ex, 6, 1, 1); // glint
+  }
   // smile
-  g.fillStyle = '#8a4030';
-  g.fillRect(5, 11, 1, 1); g.fillRect(6, 12, 4, 1); g.fillRect(10, 11, 1, 1);
+  g.fillStyle = '#8a3b2a';
+  g.fillRect(6, 11, 4, 1); g.fillRect(7, 12, 2, 1);
   const tex = new THREE.CanvasTexture(cv);
   tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; // crisp pixels
+  FACE_TEX_CACHE[hairCss] = tex;
   return tex;
 }
-function makeHairSideTexture(hairCss) {
-  // head sides/back: hair fringe on top rows, skin below
-  const S = 16, cv = document.createElement('canvas'); cv.width = cv.height = S;
-  const g = cv.getContext('2d');
-  g.fillStyle = SKIN_CSS; g.fillRect(0, 0, S, S);
-  g.fillStyle = hairCss; g.fillRect(0, 0, S, 5);
-  // jagged hairline
-  g.fillRect(1, 5, 2, 1); g.fillRect(6, 5, 3, 1); g.fillRect(12, 5, 2, 1);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
-  return tex;
-}
-const FACE_TEX = makeFaceTexture();
-const FACE_MAT = new THREE.MeshLambertMaterial({ map: FACE_TEX });
-const SKIN_MAT = new THREE.MeshLambertMaterial({ color: 0xf2c99a });
-const HAIR_MATS = HAIR_COLORS.map(c => new THREE.MeshLambertMaterial({ color: c }));
-const HAIR_SIDE_TEX = {}, HAIR_SIDE_MATS = {};
-for (const c of HAIR_COLORS) {
-  const css = '#' + c.toString(16).padStart(6, '0');
-  HAIR_SIDE_TEX[c] = makeHairSideTexture(css);
-  HAIR_SIDE_MATS[c] = new THREE.MeshLambertMaterial({ map: HAIR_SIDE_TEX[c] });
-}
-function hairMatsFor(code) {
-  // deterministic hair color per character; returns [sideMat, topMat]
-  const i = (parseInt(code, 10) || 0) % HAIR_COLORS.length;
-  return [HAIR_SIDE_MATS[HAIR_COLORS[i]], HAIR_MATS[i]];
-}
-function makeCharacter(color, code, isPlayer = false, skinId = 'default') {
+function makeCharacter(code, isPlayer = false, skinId = 'default') {
   const grp = new THREE.Group();
   const skin = skinById(skinId);
-  const bodyColor = isPlayer && skin.color ? skin.color : color;
-  const mat = MAT(bodyColor), dark = MAT(0x2f3542);
-  // Steve-like proportions (local units, ~2.42 tall before CHAR_SCALE)
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.75, 0.36), dark); legL.position.set(-0.17, 0.375, 0);
-  const legR = legL.clone(); legR.position.x = 0.17;
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.78, 0.42), mat); body.position.y = 1.14;
-  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.72, 0.3), mat); armL.position.set(-0.48, 1.17, 0);
-  const armR = armL.clone(); armR.position.x = 0.48;
-  // head: pixel-art face on +Z (character front), hair on top/sides/back
-  const [hairSide, hairTop] = hairMatsFor(code);
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.56, 0.56, 0.56),
-    [hairSide, hairSide, hairTop, SKIN_MAT, FACE_MAT, hairSide]
-  );
-  head.position.y = 1.81;
-  const hat = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.16, 0.62), mat); hat.position.y = 2.17;
-  grp.add(legL, legR, body, armL, armR, head, hat);
+  const hairCss = hairFor(code);
+  const shirtCol = isPlayer && skin.color ? skin.color : SHIRT_PALETTE[(Math.random() * SHIRT_PALETTE.length) | 0];
+  const pantsCol = PANTS_PALETTE[(Math.random() * PANTS_PALETTE.length) | 0];
+  const shirtMat = new THREE.MeshLambertMaterial({ color: shirtCol });
+  const pantsMat = MAT(pantsCol);
+  const skinMat = new THREE.MeshLambertMaterial({ color: SKIN_CSS });
+  const hairMat = new THREE.MeshLambertMaterial({ color: hairCss });
+  // legs
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.6, 0.24), pantsMat); legL.position.set(-0.14, 0.3, 0);
+  const legR = legL.clone(); legR.position.x = 0.14;
+  // torso
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.75, 0.34), shirtMat); torso.position.set(0, 0.975, 0);
+  // arms
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.65, 0.24), shirtMat); armL.position.set(-0.42, 0.975, 0);
+  const armR = armL.clone(); armR.position.x = 0.42;
+  // head: 0.56^3, pixel face on the +Z (front) face, hair color on top
+  const faceTex = makeFaceTexture(hairCss);
+  const headMats = [skinMat, skinMat, hairMat, skinMat,
+    new THREE.MeshLambertMaterial({ map: faceTex }), skinMat];
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.56, 0.56), headMats);
+  head.position.set(0, 1.63, 0);
+  // hair cap on top of the head
+  const hairCap = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.2, 0.62), hairMat);
+  hairCap.position.set(0, 1.93, -0.02);
+  grp.add(legL, legR, torso, armL, armR, head, hairCap);
   let label = null;
   if (isPlayer) {
     // locator ring (feet) instead of a floating code label — no view obstruction
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.07, 8, 26), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.08; grp.add(ring);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.06, 8, 26), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.06; grp.add(ring);
   } else {
     label = codeSprite(code); label.position.y = 2.9;
     grp.add(label);
   }
   grp.scale.setScalar(CHAR_SCALE);
-  grp.userData = { legL, legR, armL, armR, label, skinMats: isPlayer ? [mat] : null, skinId: isPlayer ? skinId : 'default' };
+  grp.userData = { legL, legR, armL, armR, label, skinMats: isPlayer ? [shirtMat] : null, skinId: isPlayer ? skinId : 'default' };
   scene.add(grp);
   return grp;
 }
@@ -865,23 +933,24 @@ function newlyUnlockedRewards(prev, now) {
   return REWARDS.filter(r => prev < r.need && now >= r.need);
 }
 function attachAccessory(p, id) {
+  // anchored to the Steve-style body: feet y~0, torso 0.6-1.35, head top ~2.0
   const grp = p.grp, parts = [];
   const add = (m) => { grp.add(m); parts.push(m); };
   const bx = (x, y, z, w, h, d, c) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), MAT(c)); m.position.set(x, y, z); add(m); return m; };
-  if (id === 'shoes') { bx(-0.17, 0.12, 0.02, 0.36, 0.24, 0.42, 0xf5f5f5); bx(0.17, 0.12, 0.02, 0.36, 0.24, 0.42, 0xf5f5f5); }
-  else if (id === 'hat') { bx(0, 2.3, 0, 0.68, 0.1, 0.66, 0x212121); bx(0, 2.56, 0, 0.48, 0.42, 0.48, 0x37474f); }
-  else if (id === 'shirt') { bx(0, 1.3, 0, 0.7, 0.22, 0.46, 0x00e5ff); }
-  else if (id === 'jacket') { bx(0, 1.14, 0, 0.74, 0.86, 0.5, 0x5d4037); }
+  if (id === 'shoes') { bx(-0.14, 0.11, 0.02, 0.26, 0.22, 0.3, 0xf5f5f5); bx(0.14, 0.11, 0.02, 0.26, 0.22, 0.3, 0xf5f5f5); }
+  else if (id === 'hat') { bx(0, 1.94, 0, 0.74, 0.09, 0.74, 0x212121); bx(0, 2.14, 0, 0.46, 0.4, 0.46, 0x37474f); }
+  else if (id === 'shirt') { bx(0, 1.0, 0.19, 0.62, 0.22, 0.06, 0x00e5ff); }
+  else if (id === 'jacket') { bx(0, 0.98, 0, 0.72, 0.82, 0.46, 0x5d4037); }
   else if (id === 'crown') {
-    const yB = accEquipped('hat') ? 2.82 : 2.3; // stack on top of the hat when both equipped
-    bx(0, yB, 0, 0.5, 0.2, 0.5, 0xffd700);
-    bx(-0.17, yB + 0.2, 0, 0.1, 0.22, 0.1, 0xffd700); bx(0, yB + 0.24, 0, 0.1, 0.3, 0.1, 0xffd700); bx(0.17, yB + 0.2, 0, 0.1, 0.22, 0.1, 0xffd700);
+    const yB = accEquipped('hat') ? 2.42 : 2.06; // stack on top of the hat when both equipped
+    bx(0, yB, 0, 0.5, 0.18, 0.5, 0xffd700);
+    bx(-0.17, yB + 0.18, 0, 0.1, 0.2, 0.1, 0xffd700); bx(0, yB + 0.22, 0, 0.1, 0.28, 0.1, 0xffd700); bx(0.17, yB + 0.18, 0, 0.1, 0.2, 0.1, 0xffd700);
   }
   else if (id === 'wings') {
-    const w1 = bx(-0.42, 1.35, 0.3, 0.5, 0.7, 0.12, 0xffffff); w1.rotation.z = 0.35;
-    const w2 = bx(0.42, 1.35, 0.3, 0.5, 0.7, 0.12, 0xffffff); w2.rotation.z = -0.35;
+    const w1 = bx(-0.5, 1.25, -0.28, 0.42, 0.66, 0.1, 0xffffff); w1.rotation.z = 0.35;
+    const w2 = bx(0.5, 1.25, -0.28, 0.42, 0.66, 0.1, 0xffffff); w2.rotation.z = -0.35;
   }
-  else if (id === 'cape') { const c = bx(0, 1.15, 0.3, 0.56, 0.9, 0.1, 0xd32f2f); c.rotation.x = 0.12; }
+  else if (id === 'cape') { const c = bx(0, 1.0, -0.26, 0.62, 0.95, 0.08, 0xd32f2f); c.rotation.x = -0.1; }
   // 'trail' is a particle effect — handled by updateTrail, no mesh
   grp.userData.acc = grp.userData.acc || {};
   grp.userData.acc[id] = parts;
@@ -972,8 +1041,8 @@ app.insertAdjacentHTML('beforeend', `
       <details><summary>Items</summary><p>&#x2764;&#xFE0F; LOVE blocks one kill &bull; &#x1F500; DECOY randomizes your code &bull; &#x1F4A5; CONFUSE scrambles the nearest enemy's code &mdash; but beware &#x1F3AD; MIMIC traps that look like real items and scramble YOUR code! Supply drops fall every 15 seconds &mdash; fight over them.</p></details>
       <details><summary>Kill rewards</summary><p>Your total kills across all matches unlock accessories for YOUR character: &#x1F45F; SHOES (10), &#x1F3A9; HAT (15), &#x1F455; SHIRT (25), &#x1F9E5; JACKET (35), &#x1F451; GOLDEN CROWN (50), &#x1F9B8; WINGS (75), &#x1F308; RAINBOW TRAIL (100), &#x1F9B8;&#x200D;&#x2642;&#xFE0F; CAPE (150). They equip automatically; toggle them in CHARACTER.</p></details>
       <details><summary>Minimap</summary><p>Top-left corner shows you, the zone, items, drop beacons &mdash; and enemies, but ONLY ones you can actually see (no wallhack!).</p></details>
-      <details><summary>Announcements</summary><p>Kill streaks earn on-screen announcements WITH an announcer voice: FIRST BLOOD, GOOD GAME, DOUBLE KILL, TRIPLE KILL, RAMPAGE, UNSTOPPABLE, LEGENDARY, plus REVENGE and LONG SHOT. 3+ streak sets you ON FIRE (bragging rights only!). Dying plays a short disappointed "ahhh". Toggle all sound in INFO &rarr; Sound.</p></details>
-      <details><summary>PC controls</summary><p>Mouse locks automatically when the match starts &mdash; move the mouse to look (ESC to release, click to re-lock) &bull; WASD moves relative to the camera, like an FPS &bull; SHIFT to sprint &bull; SPACE to jump &bull; type 0-9</p></details>
+      <details><summary>Announcements</summary><p>Kill streaks earn on-screen announcements WITH a deep announcer voice: FIRST BLOOD, GOOD GAME, DOUBLE KILL, TRIPLE KILL, RAMPAGE, UNSTOPPABLE, LEGENDARY, plus REVENGE, LONG SHOT and SUDDEN DEATH. 3+ streak sets you ON FIRE (bragging rights only!). Dying plays a deep resigned "Ahhhhhhh" and shows a 4-5s kill cam on your killer before the drone cam. Toggle all sound in INFO &rarr; Sound.</p></details>
+      <details><summary>PC controls</summary><p>Mouse locks automatically when the match starts &mdash; move the mouse to look (ESC to release, click to re-lock) &bull; the game also goes fullscreen automatically (ESC or F11 to exit) &bull; WASD moves relative to the camera, like an FPS &bull; SHIFT to sprint &bull; SPACE to jump &bull; type 0-9</p></details>
       <details><summary>Mobile controls</summary><p>Phones must be in <b>LANDSCAPE</b> mode — portrait shows a rotate prompt and pauses the game. Left joystick to move &bull; drag the right side of the screen to look &bull; JUMP button &bull; number keypad. Tap the minimap to collapse/expand it.</p></details>
       <details><summary>Sound</summary><p><button id="snd-btn" class="btn small">&#x1F50A; SOUND: ON</button><br>Announcer voice, death groan and menu beeps. Saved in this browser.</p></details>
       <details><summary>Mouse sensitivity</summary><p><input type="range" id="sens" min="0.5" max="2" step="0.1" style="width:180px;vertical-align:middle"> <b id="sens-val">…</b><br>Higher = faster camera look. Applies instantly and is saved in this browser.</p></details>
@@ -988,6 +1057,7 @@ app.insertAdjacentHTML('beforeend', `
   <div id="killfeed"></div>
   <div id="banner"></div>
   <div id="announce" class="hidden"></div>
+  <div id="killcam-card" class="hidden"></div>
   <canvas id="minimap" width="150" height="150"></canvas>
   <button id="mmbtn" class="hidden" title="Expand minimap">&#x1F5FA;&#xFE0F;</button>
   <div id="zonebar"></div>
@@ -1012,8 +1082,10 @@ const padEl = $('pad');
 padEl.innerHTML = [1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0, '⌫'].map(k =>
   k === '' ? '<span></span>' : `<button data-k="${k}">${k}</button>`).join('');
 
-// skins picker on the menu
+// persisted unlock state (wins, skin, kill rewards)
 let unlocks = loadUnlocks();
+
+// skins picker on the menu
 function renderSkins() {
   const row = $('skin-row');
   row.innerHTML = '';
@@ -1285,12 +1357,38 @@ const beacons = []; // {mesh,t}
 const dropCols = []; // supply-pod colliders (removed between matches)
 const DROP_EVERY = 15;
 const DROP_TYPES = ['love', 'decoy', 'confuse'];
+let CRATE_TEX = null;
+function makeCrateTexture() {
+  // plain wooden supply crate (v18 style) — no logo
+  if (CRATE_TEX) return CRATE_TEX;
+  const S = 128, cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#8a5a2e'; g.fillRect(0, 0, S, S);
+  // plank lines
+  g.strokeStyle = 'rgba(60,35,12,0.55)'; g.lineWidth = 3;
+  for (let y = 22; y < S; y += 26) { g.beginPath(); g.moveTo(0, y); g.lineTo(S, y); g.stroke(); }
+  // wood grain
+  g.strokeStyle = 'rgba(60,35,12,0.3)'; g.lineWidth = 1;
+  for (let i = 0; i < 14; i++) {
+    const y = Math.random() * S;
+    g.beginPath(); g.moveTo(0, y); g.quadraticCurveTo(S / 2, y + 6, S, y); g.stroke();
+  }
+  // frame border
+  g.strokeStyle = '#5d3a17'; g.lineWidth = 10; g.strokeRect(5, 5, S - 10, S - 10);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  CRATE_TEX = tex;
+  return tex;
+}
 function supplyDrop() {
   const { x, z } = spawnItemPos();
-  // drop pod: glowing crate falling from the sky
+  // drop pod: wooden crate falling from the sky
   const grp = new THREE.Group();
-  const crate = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.7, 1.7), MAT(0xffb300));
-  const glow = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.25, 2.0), new THREE.MeshBasicMaterial({ color: 0xffe08a }));
+  const crate = new THREE.Mesh(
+    new THREE.BoxGeometry(1.7, 1.7, 1.7),
+    new THREE.MeshLambertMaterial({ map: makeCrateTexture() })
+  );
+  const glow = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.25, 2.0), new THREE.MeshBasicMaterial({ color: 0xf7b500 }));
   glow.position.y = 0.95; grp.add(crate, glow);
   grp.position.set(x, 34, z);
   scene.add(grp);
@@ -1309,17 +1407,19 @@ function updateDrops(dt) {
     if (k >= 1) {
       // landed: burst 2-3 items around the pod, leave a light beacon
       const n = 2 + (Math.random() < 0.5 ? 1 : 0);
+      const types = [];
+      for (let j = 0; j < n; j++) types.push(rollItemType(DROP_TYPES));
       for (let j = 0; j < n; j++) {
         const a = (j / n) * Math.PI * 2 + Math.random() * 0.6;
         const ix = d.x + Math.cos(a) * 2.4, iz = d.z + Math.sin(a) * 2.4;
         const cx = Math.max(-MAP + 2, Math.min(MAP - 2, ix));
         const cz = Math.max(-MAP + 2, Math.min(MAP - 2, iz));
-        spawnItemAt(cx, cz, rollItemType(DROP_TYPES), true);
+        spawnItemAt(cx, cz, types[j], true);
       }
       dropCols.push(addCollider(d.x, d.z, 1.9, 1.9, 1.7));
       const beam = new THREE.Mesh(
         new THREE.CylinderGeometry(1.3, 1.7, 70, 12, 1, true),
-        new THREE.MeshBasicMaterial({ color: 0xffb300, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
+        new THREE.MeshBasicMaterial({ color: new THREE.Color('#f7b500'), transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
       );
       beam.position.set(d.x, 35, d.z);
       scene.add(beam);
@@ -1346,7 +1446,7 @@ const DIFFS = {
 };
 const GRACE_S = 3; // seconds after GO where bots cannot type
 const G = {
-  mode: 'menu', // menu | countdown | play | spectate | end
+  mode: 'menu', // menu | countdown | play | killcam | spectate | end
   players: [], player: null, startTime: 0, elapsed: 0,
   buffer: '', lockUntil: 0, kills: 0, seen: new Map(), // code -> lastSeen time
   diff: 'medium', diffCfg: DIFFS.medium, mapMode: 'day', firstBlood: false,
@@ -1400,6 +1500,9 @@ const PLAYER_COUNT = 50;
 function startMatch(diffKey) {
   if (diffKey && DIFFS[diffKey]) { G.diff = diffKey; G.diffCfg = DIFFS[diffKey]; }
   LOWQ = resolveQuality() === 'low'; // apply the SELECT GRAPHICS choice to this match
+  // LOW quality: halve the cloud instances and drop the sun glow sprite (cheap wins)
+  if (cloudMesh) cloudMesh.count = LOWQ ? Math.ceil(cloudMesh.userData.max / 2) : cloudMesh.userData.max;
+  sunSprite.visible = !LOWQ && G.mapMode !== 'night'; // applyMapMode re-asserts this too
   // auto-lock the mouse straight from this click (it's a user gesture, so the
   // browser allows it) — no extra click needed to start looking around
   if (!isTouch) {
@@ -1408,6 +1511,15 @@ function startMatch(diffKey) {
       if (r && r.catch) r.catch(() => {});
     } catch (e) {}
   }
+  // auto-fullscreen from the same gesture (mobile: hides the browser address bar
+  // for a true fullscreen game; iOS Safari has no Fullscreen API — skipped quietly)
+  try {
+    const de = document.documentElement;
+    if (de.requestFullscreen && !document.fullscreenElement) {
+      const f = de.requestFullscreen();
+      if (f && f.catch) f.catch(() => {});
+    }
+  } catch (e) {}
   const cfg = G.diffCfg;
   // clear old
   for (const p of G.players) scene.remove(p.grp);
@@ -1429,7 +1541,7 @@ function startMatch(diffKey) {
   for (let i = 0; i < PLAYER_COUNT; i++) {
     const spot = freeSpot(spots); spots.push(spot);
     const isPlayer = i === 0;
-    const grp = makeCharacter(COLORS[i], codes[i], isPlayer, unlocks.skin);
+    const grp = makeCharacter(codes[i], isPlayer, unlocks.skin);
     grp.position.set(spot.x, 0, spot.z);
     // bot personality: 40% aggressive, 30% camper, 30% hunter
     let persona = 'aggro';
@@ -1520,8 +1632,10 @@ $('btn-specfollow').addEventListener('click', () => {
 });
 $('btn-spexit').addEventListener('click', () => location.reload());
 renderer.domElement.addEventListener('click', () => {
+  if (G.mode === 'killcam') { endKillcam(); return; } // skip the kill cam
   if (G.mode === 'play' && !isTouch) lockPointer();
 });
+$('killcam-card').addEventListener('click', () => { if (G.mode === 'killcam') endKillcam(); });
 $('locktip').addEventListener('click', lockPointer);
 addEventListener('mousemove', (e) => {
   if (!locked || G.mode !== 'play') return;
@@ -1663,10 +1777,9 @@ function banner(txt) {
 }
 // ---------- Kill announcements: compact top-center pills (v18), queued (max 2) ----------
 const annQ = []; let annActive = false;
-function announce(txt, cls, voice) {
+function announce(txt, cls) {
   if (annQ.length >= 2) annQ.shift(); // never stack-block the view
   annQ.push({ txt, cls });
-  if (voice) speak(voice); // announcer voice for the player's moments
   if (!annActive) dequeueAnnounce();
 }
 function dequeueAnnounce() {
@@ -1700,9 +1813,10 @@ function eliminate(victim, killer, how, killDist = 0) {
   if (killer && killer !== victim && how === 'code') {
     killer.streak = (killer.streak || 0) + 1;
     // FIRST BLOOD: the very first code kill of the whole match
+    let fbPlayer = false; // did the PLAYER just score first blood?
     if (!G.firstBlood) {
       G.firstBlood = true;
-      if (killer.isPlayer) announce('🩸 FIRST BLOOD!', 'firstblood', 'First Blood!');
+      if (killer.isPlayer) { announce('🩸 FIRST BLOOD!', 'firstblood'); fbPlayer = true; }
       else feed(`🩸 <b>FIRST BLOOD</b> — ${killer.code}`);
     }
     if (killer.streak >= 3 && !killer.grp.userData.fireSprite) {
@@ -1725,10 +1839,18 @@ function eliminate(victim, killer, how, killDist = 0) {
       if (fresh.length) applyAccessories(G.player);
       renderRewards();
       const tier = Math.min(killer.streak, 6);
-      const tierVoice = ['', 'Good game!', 'Double kill!', 'Triple kill!', 'Rampage!', 'Unstoppable!', 'Legendary!'][tier];
-      announce(['', 'GOOD GAME!!!', 'DOUBLE KILL!!', 'TRIPLE KILL!!!', 'RAMPAGE!!!!', 'UNSTOPPABLE!!!!!', 'LEGENDARY!!!!!!'][tier], 't' + tier, tierVoice);
-      if (G.player.lastKiller === victim) { announce('😤 REVENGE!', 'revenge', 'Revenge!'); G.player.lastKiller = null; }
-      if (killDist > 40) announce('🎯 LONG SHOT! ' + Math.round(killDist) + 'm', 'longshot', 'Long shot!');
+      // ONE spoken line per kill event: the most important banner owns the
+      // voice. (Fixes the old cross-wiring where FIRST BLOOD's banner showed
+      // while "good game" was spoken — speak() cancels the previous line.)
+      let voice = fbPlayer ? 'First blood!' : null;
+      if (!(fbPlayer && tier === 1)) {
+        // skip the tier-1 "GOOD GAME" line when FIRST BLOOD already announced this kill
+        announce(['', 'GOOD GAME!!!', 'DOUBLE KILL!!', 'TRIPLE KILL!!!', 'RAMPAGE!!!!', 'UNSTOPPABLE!!!!!', 'LEGENDARY!!!!!!'][tier], 't' + tier);
+        if (!voice) voice = ['', 'Good game!', 'Double kill!', 'Triple kill!', 'Rampage!', 'Unstoppable!', 'Legendary!'][tier];
+      }
+      if (G.player.lastKiller === victim) { announce('😤 REVENGE!', 'revenge'); if (!voice) voice = 'Revenge!'; G.player.lastKiller = null; }
+      if (killDist > 40) { announce('🎯 LONG SHOT! ' + Math.round(killDist) + 'm', 'longshot'); if (!voice) voice = 'Long shot!'; }
+      if (voice) speak(voice);
     }
   }
   feed(`<b>${killer ? killer.code : 'ZONE'}</b> ▸ ${victim.code}${victim.isPlayer ? ' (YOU)' : ''}`);
@@ -1737,7 +1859,7 @@ function eliminate(victim, killer, how, killDist = 0) {
   const alive = G.players.filter(p => p.alive);
   // SUDDEN DEATH at 5 or fewer alive
   if (alive.length <= 5 && alive.length > 1) triggerSuddenDeath();
-  if (victim.isPlayer) { deathScream(); enterSpectate(killer); return; }
+  if (victim.isPlayer) { deathScream(); startKillcam(killer); return; }
   if (alive.length === 1 && alive[0].isPlayer) { endMatch(true); return; }
   if (alive.length <= 1) { endMatch(G.player.alive); }
 }
@@ -1746,6 +1868,7 @@ function endMatch(won) {
   if (G.mode === 'end') return;
   G.mode = 'end';
   document.exitPointerLock && document.exitPointerLock();
+  try { if (document.fullscreenElement && document.exitFullscreen) { const f = document.exitFullscreen(); if (f && f.catch) f.catch(() => {}); } } catch (e) {}
   $('minimap').style.display = 'none';
   $('mmbtn').classList.add('hidden');
   const place = won ? 1 : placement();
@@ -1797,6 +1920,56 @@ function enterSpectate(killer) {
 function updateFollowBtn() {
   const b = $('btn-specfollow');
   if (b) b.textContent = '\uD83C\uDFAF FOLLOW LEADER: ' + (G.drone && G.drone.follow ? 'ON' : 'OFF');
+}
+
+// ---------- v21 kill cam: 4-5s on the killer, then drone spectate ----------
+const kcRingGeo = new THREE.RingGeometry(1.1, 1.45, 40);
+const kcRingMat = new THREE.MeshBasicMaterial({ color: 0xffd93b, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false });
+function startKillcam(killer) {
+  G.mode = 'killcam';
+  document.exitPointerLock && document.exitPointerLock();
+  $('touch').classList.add('hidden');
+  $('minimap').style.display = 'none';
+  $('mmbtn').classList.add('hidden');
+  $('warn').style.opacity = 0; // no DETECTED warnings during the kill cam
+  const k = killer && killer.alive ? killer : null;
+  G.killcam = { killer: k, t0: performance.now(), dur: k ? 4500 : 3000, ang: Math.random() * Math.PI * 2, done: false, ring: null };
+  const card = $('killcam-card');
+  card.innerHTML = k
+    ? `<div class="kc-big">☠ ELIMINATED BY <b style="color:#ffd93b">${k.code}</b></div><div class="kc-sub">tap / click to skip</div>`
+    : `<div class="kc-big">☠ ELIMINATED BY THE ZONE</div><div class="kc-sub">tap / click to skip</div>`;
+  card.classList.remove('hidden');
+  if (k) {
+    const ring = new THREE.Mesh(kcRingGeo, kcRingMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(k.pos.x, 0.06, k.pos.z);
+    scene.add(ring);
+    G.killcam.ring = ring;
+  }
+}
+function endKillcam() {
+  const kc = G.killcam;
+  if (!kc || kc.done) return;
+  kc.done = true;
+  if (kc.ring) { scene.remove(kc.ring); kc.ring = null; }
+  $('killcam-card').classList.add('hidden');
+  enterSpectate(kc.killer);
+}
+function updateKillcam(dt) {
+  const kc = G.killcam; if (!kc || kc.done) return;
+  const now = performance.now();
+  if (now - kc.t0 >= kc.dur) { endKillcam(); return; }
+  kc.ang += dt * 0.55; // slow orbit around the killer
+  const k = kc.killer;
+  const cx = k ? k.pos.x : G.player.pos.x, cz = k ? k.pos.z : G.player.pos.z;
+  const r = 9 - ((now - kc.t0) / kc.dur) * 3.5; // slow push-in: 9 -> 5.5
+  camera.position.set(cx + Math.cos(kc.ang) * r, 3.2, cz + Math.sin(kc.ang) * r);
+  camera.lookAt(cx, 1.1, cz);
+  if (kc.ring && k) {
+    kc.ring.position.set(k.pos.x, 0.06, k.pos.z);
+    const s = 1 + Math.sin(now * 0.008) * 0.12;
+    kc.ring.scale.set(s, s, 1);
+  }
 }
 function specTouchStart(e) {
   const ts = e.changedTouches;
@@ -1941,7 +2114,7 @@ function updateCamera(dt) {
   yaw += angleDelta(yaw, yawT) * sk;
   pitch += (pitchT - pitch) * sk;
   _fwd.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
-  _tgt.copy(p.pos); _tgt.y += 1.18;
+  _tgt.copy(p.pos); _tgt.y += 1.0; // Steve-style: aim at the torso/head
   _tgt.x += Math.cos(yaw) * 0.4; _tgt.z += -Math.sin(yaw) * 0.4; // slight shoulder offset
   _des.copy(_tgt).addScaledVector(_fwd, -3.45); _des.y += 0.55;
   // pull camera in when an obstacle sits between character and camera
@@ -2184,7 +2357,7 @@ function updateBot(bot, dt) {
           bot.steerBias = (left >= right ? 1 : -1) * (0.85 + Math.random() * 0.45);
           // low obstacle right ahead (crate lip, step, curb): hop it like a human would
           const c = pointBlocked(bot.pos.x + Math.sin(baseAng) * 1.5, bot.pos.z + Math.cos(baseAng) * 1.5, y);
-          if (c && c.y1 - y <= 1.35 && bot.grounded) doJump(bot);
+          if (c && c.y1 - y <= 0.9 && bot.grounded) doJump(bot);
         } else {
           bot.steerBias *= 0.55; // path clear: ease back to a straight line
           if (Math.abs(bot.steerBias) < 0.06) bot.steerBias = 0;
@@ -2388,6 +2561,7 @@ function triggerSuddenDeath() {
   G.suddenDeath = true;
   banner('⚠️ SUDDEN DEATH! Zone collapsing — codes blinking!');
   feed('⚠️ <b>SUDDEN DEATH</b> — 5 players left, zone collapsing!');
+  speak('Sudden death!');
   beep(440, 0.2, 'sawtooth', 0.16); setTimeout(() => beep(330, 0.25, 'sawtooth', 0.16), 220);
 }
 
@@ -2408,7 +2582,7 @@ function checkRotate() {
   const need = isTouch && isPortrait();
   $('rotate').classList.toggle('hidden', !need);
   const was = rotPaused;
-  rotPaused = need && (G.mode === 'play' || G.mode === 'countdown' || G.mode === 'spectate');
+  rotPaused = need && (G.mode === 'play' || G.mode === 'countdown' || G.mode === 'spectate' || G.mode === 'killcam');
   if (rotPaused && !was) pauseT0 = performance.now();
   // on resume, shift the match clock so the zone/bots don't jump forward
   if (!rotPaused && was && pauseT0) { G.startTime += performance.now() - pauseT0; pauseT0 = 0; }
@@ -2425,7 +2599,17 @@ function loop() {
   requestAnimationFrame(loop);
   if (rotPaused) return; // portrait on phone: freeze the game behind the rotate overlay
   const dt = Math.min(clock.getDelta(), 0.05);
-  if (G.mode === 'play' || G.mode === 'countdown' || G.mode === 'spectate') {
+  // v19 dynamic resolution (touch only): track FPS, step pixel ratio down/up every 2.5s
+  if (dt > 0) fpsEMA = fpsEMA * 0.94 + (1 / dt) * 0.06;
+  if (isTouch && G.mode === 'play') {
+    prT += dt;
+    if (prT > 2.5) {
+      prT = 0;
+      if (fpsEMA < 45 && prIdx < PR_STEPS.length - 1) { prIdx++; renderer.setPixelRatio(PR_STEPS[prIdx]); }
+      else if (fpsEMA > 57 && prIdx > 0) { prIdx--; renderer.setPixelRatio(PR_STEPS[prIdx]); }
+    }
+  }
+  if (G.mode === 'play' || G.mode === 'countdown' || G.mode === 'spectate' || G.mode === 'killcam') {
     G.elapsed = (performance.now() - G.startTime) / 1000;
     if (G.mode === 'play') {
       updatePlayer(dt);
@@ -2445,6 +2629,12 @@ function loop() {
       updateDrops(dt);
       updateZone(dt);
       updateSpectate(dt);
+    } else if (G.mode === 'killcam') {
+      for (const b of G.players) if (!b.isPlayer) updateBot(b, dt);
+      updateItems(dt);
+      updateDrops(dt);
+      updateZone(dt);
+      updateKillcam(dt);
     } else if (G.mode === 'countdown') {
       const p = G.player;
       if (p) { p.yaw = yaw + Math.PI; animateChar(p, dt, false); updateCamera(dt); }

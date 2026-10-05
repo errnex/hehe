@@ -127,3 +127,7 @@ canvas{display:block}
 #locktip{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:35;background:rgba(0,0,0,.6);padding:10px 18px;border-radius:10px;font-size:14px;color:#d8e6f2;cursor:pointer}
 .shake{animation:shk .18s}
 @keyframes shk{0%{transform:translateX(-50%)}25%{transform:translateX(calc(-50% - 7px))}75%{transform:translateX(calc(-50% + 7px))}100%{transform:translateX(-50%)}}
+/* v21 kill cam card */
+#killcam-card{position:absolute;left:50%;bottom:13%;transform:translateX(-50%);z-index:40;background:rgba(10,14,20,.85);border:1px solid #ffd93b;border-radius:12px;padding:10px 20px;text-align:center;cursor:pointer;box-shadow:0 4px 24px rgba(0,0,0,.6);pointer-events:auto}
+#killcam-card .kc-big{font-size:18px;font-weight:900;color:#fff;white-space:nowrap}
+#killcam-card .kc-sub{font-size:12px;color:#9fb3c8;margin-top:4px}

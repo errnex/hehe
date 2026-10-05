@@ -14,9 +14,22 @@ Every sub-screen has a ← BACK button. Each screen shows only its own options.
 
 ## How to play
 
-- **Third-person view:** your own Steve-style blocky character is visible — pixel-art face (eyes + smile), hair, colored shirt — identified by a white ring at its feet (no floating code label above your head — memorize it during the 5s countdown). WASD/joystick movement turns the character to face the direction it is actually running, while the camera smoothly settles behind it. The camera pulls in when a wall or container blocks it.
+- **Third-person view:** your own Steve-style blocky character is visible — square head with pixel-art face (eyes + smile), hair, colored shirt/pants — identified by a white ring at its feet (no floating code label above your head — memorize it during the 5s countdown). WASD/joystick movement turns the character to face the direction it is actually running, while the camera smoothly settles behind it. The camera pulls in when a wall or container blocks it.
 - **PC:** mouse auto-locks when the match starts • move the **mouse to look** (FPS-style: smoothed, pitch-clamped, pointer-lock; WASD moves relative to the camera) • `ESC` releases, click to re-lock • `SHIFT` to sprint • `SPACE` to jump • type `0-9` to enter codes • `Backspace` to delete • mouse sensitivity slider in INFO • after death: drone cam — `WASD`/arrows to pan, mouse wheel to zoom
 - **Mobile:** phones must be in **LANDSCAPE** — portrait shows a rotate prompt and pauses the match • left joystick to move • drag the right side of the screen to rotate the camera • `JUMP` button • on-screen number keypad • tap the minimap to collapse/expand it (smaller on phones)
+
+## Death & kill presentation (v21)
+
+- **Kill cam:** when you die, the camera swings to your killer for 4–5s (slow orbit + push-in, killer marked with a pulsing gold ring, "ELIMINATED BY <code>" card) — then it hands off to the drone spectate cam. Zone deaths show a brief "ELIMINATED BY THE ZONE" card instead. Click/tap anytime to skip straight to the drone.
+- **Announcer voice:** fixed the old cross-wiring (FIRST BLOOD's banner used to play while "good game" was spoken — `speak()` cancels the previous line, and two lines fired in the same frame). Now exactly ONE spoken line per kill event, always matching the top banner; SUDDEN DEATH also speaks its own line. Voice delivery is deeper and more dramatic (deepest male English voice available, pitch 0.65, rate 0.88). Voice quality still depends on the voices installed in the player's browser/OS.
+- **Death sound:** the old "ahhh" could stay silent when the AudioContext was created after the one-shot unlock gesture (it stayed suspended). Now it resumes-and-plays defensively, and the sound itself is a deep, heavy, resigned ~0.9s "Ahhhhhhh" (200→80Hz: sine core + lowpassed sawtooth for throat texture, no vibrato), clearly audible.
+
+## Visuals (v20)
+
+- **Characters:** Steve-style blocky humans are back (v18 look) — square head with pixel-art face (eyes + smile, 16×16 canvas texture), 6 hair colors, colored shirts/pants per character. Accessories (hat, crown, wings, cape, shoes…) re-anchored to the body with per-item equip toggles.
+- **Supply drops:** plain wooden crates (v18 style).
+- **Auto-fullscreen:** the match requests fullscreen from the SELECT GRAPHICS click (hides the mobile browser address bar); iOS Safari falls back gracefully; fullscreen exits when the match ends.
+- **Mobile perf:** dynamic resolution on touch devices — pixel ratio steps down (2 → 1.5 → 1.25 → 1) when FPS sags below ~45, back up when it recovers; LOW quality also halves clouds and hides the sun glow sprite.
 
 ## Visuals (v16 polish)
 
@@ -61,7 +74,7 @@ A small canvas map in the top-left corner (~10fps redraw): your position + facin
 
 ### Day / Night map select
 
-After PLAY WITH BOTS you pick the map: **☀️ DAY** or **🌙 NIGHT**, then the difficulty. Night mode: dark sky with stars, dimmed ambient, warm glowing park lamps + doorway lights (only 6 point lights for performance), brighter drop beacons — and enemy code labels fade out ~15% sooner (subtle, not punishing). Gameplay is otherwise identical.
+After PLAY WITH BOTS you pick the map: **☀️ DAY** or **🌙 NIGHT**, then the difficulty. Night mode: dark sky with stars, dimmed ambient, warm glowing lamps everywhere (every lamp post + building interiors carry real point lights) — and enemy code labels fade out ~15% sooner (subtle, not punishing). Gameplay is otherwise identical.
 
 ### Kill streaks
 
@@ -110,7 +123,7 @@ The panel shows your total kills, each reward's unlock state, and progress to th
 
 ### Night lighting
 
-At night every one of the 10 buildings gets an entrance lamp and both roads get lamp posts (emissive bulbs + glow for all; real point lights budgeted to 10: 4 park, 4 building, 2 street — the rest are emissive-only so the map looks evenly lit without killing mobile FPS).
+At night every one of the 10 buildings gets an entrance lamp and both roads get lamp posts — and since v22 **every** lamp carries a real point light with the park-lamp spec (0xffc37a, intensity 40, distance 30, decay 1.7), so all lamps illuminate their surroundings, not just themselves. Building interiors are lamp-lit too (one ceiling lamp per building; the five two-story buildings also on LOW). Light budget — HIGH: 4 park + 22 lamp posts + 10 interior = 36 point lights; LOW tier (mobile): 2 park + 6 key lamp posts + 5 two-story interiors = 13.
 
 ### Crashed airplane landmark
 
